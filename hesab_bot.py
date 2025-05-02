@@ -1,89 +1,123 @@
 import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
 import pandas as pd
 from datetime import datetime
-import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
-# 🔐 توکن ربات
-TOKEN = '7701298788:AAEhZyqha5fu8YVsK7A0n5C1yQ0lFMgWbAw'
+# توکن ربات
+TOKEN = "7701298788:AAEhZyqha5fu8YVsK7A0n5C1yQ0lFMgWbAw"
 
-# مراحل گفتگو
-AMOUNT, BANK, DATE = range(3)
+# مرحله‌ها
+NAME, AMOUNT, BANK, DATE, CONFIRM = range(5)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 سلام! لطفاً مبلغ برداشت را وارد کن:")
+# شروع گفتگو
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("نام برداشت‌کننده را وارد کن:")
+    return NAME
+
+# دریافت نام برداشت‌کننده
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["name"] = update.message.text
+    await update.message.reply_text("مبلغ برداشت را وارد کن:")
     return AMOUNT
 
-async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# دریافت مبلغ
+async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["amount"] = update.message.text
-    await update.message.reply_text("🏦 نام بانک مبدأ را وارد کن:")
+    await update.message.reply_text("نام بانک مبدا را وارد کن:")
     return BANK
 
-async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["bank"] = update.message.text.strip()
-    await update.message.reply_text("📅 تاریخ را وارد کن (مثلاً 1403/02/12 یا 2025-05-02):")
+# دریافت نام بانک
+async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["bank"] = update.message.text
+    await update.message.reply_text("تاریخ برداشت را وارد کن (مثلاً 1403/02/12):")
     return DATE
 
-async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# دریافت تاریخ و نمایش اطلاعات
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["date"] = update.message.text
+
+    # استخراج اطلاعات
+    name = context.user_data["name"]
     amount = context.user_data["amount"]
     bank = context.user_data["bank"]
-    date_input = update.message.text.strip()
+    date = context.user_data["date"]
 
-    try:
-        if "/" in date_input:
-            date = datetime.strptime(date_input, "%Y/%m/%d")
-        else:
-            date = datetime.strptime(date_input, "%Y-%m-%d")
-    except:
-        await update.message.reply_text("❌ تاریخ نامعتبره. لطفاً با فرمت صحیح وارد کن.")
-        return DATE
+    # نمایش اطلاعات برای تایید
+    confirmation_text = f"آیا اطلاعات صحیح است؟\n\n" \
+                        f"برداشت‌کننده: {name}\n" \
+                        f"مبلغ: {amount}\n" \
+                        f"بانک: {bank}\n" \
+                        f"تاریخ: {date}"
 
-    filename = "transactions.xlsx"
-    sheet_name = bank
+    # دکمه‌ها برای تایید یا اصلاح
+    keyboard = [
+        [
+            InlineKeyboardButton("اصلاح", callback_data='edit'),
+            InlineKeyboardButton("تایید", callback_data='confirm')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    new_row = {
-        "تاریخ": date.strftime("%Y-%m-%d"),
-        "مبلغ": amount,
-        "بانک": bank
-    }
+    await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
+    return CONFIRM
 
-    if os.path.exists(filename):
-        with pd.ExcelWriter(filename, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-            try:
-                df_existing = pd.read_excel(filename, sheet_name=sheet_name)
-            except:
-                df_existing = pd.DataFrame(columns=["تاریخ", "مبلغ", "بانک"])
+# پردازش تایید یا اصلاح
+async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
 
-            df_new = pd.concat([df_existing, pd.DataFrame([new_row])], ignore_index=True)
-            df_new = df_new.sort_values(by="تاریخ")
-            df_new.to_excel(writer, sheet_name=sheet_name, index=False)
-    else:
-        df = pd.DataFrame([new_row])
-        with pd.ExcelWriter(filename, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    # اطلاعات از کاربر
+    name = context.user_data["name"]
+    amount = context.user_data["amount"]
+    bank = context.user_data["bank"]
+    date = context.user_data["date"]
 
-    await update.message.reply_text("✅ اطلاعات ذخیره شد.")
+    if query.data == "edit":
+        await query.edit_message_text("مراحلی که باید اصلاح کنید:\n1. نام برداشت‌کننده\n2. مبلغ\n3. بانک\n4. تاریخ")
+        return NAME
+    elif query.data == "confirm":
+        # ذخیره اطلاعات در فایل اکسل
+        filename = f"{bank}.xlsx"
+        new_data = pd.DataFrame([{"نام": name, "مبلغ": amount, "بانک": bank, "تاریخ": date}])
+
+        try:
+            existing = pd.read_excel(filename)
+            df = pd.concat([existing, new_data], ignore_index=True)
+        except FileNotFoundError:
+            df = new_data
+
+        df = df.sort_values(by="تاریخ", ascending=False)
+        df.to_excel(filename, index=False)
+
+        # ارسال فایل اکسل به کاربر
+        with open(filename, "rb") as file:
+            await query.edit_message_text("اطلاعات تایید شد. فایل به‌روز شده ارسال می‌شود.")
+            await query.message.reply_document(InputFile(file), caption="فایل به‌روز شده‌ی برداشت‌ها:")
+
+        return ConversationHandler.END
+
+# لغو عملیات
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("عملیات لغو شد.")
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ عملیات لغو شد.")
-    return ConversationHandler.END
-
-if __name__ == '__main__':
+# راه‌اندازی ربات
+if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[CommandHandler("start", start)],
         states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
             AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
             BANK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bank)],
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+            CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_confirmation)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     app.add_handler(conv_handler)
-    print("🤖 Bot is running...")
     app.run_polling()
